@@ -15,6 +15,8 @@ import {
   Check,
   AlertCircle,
   Loader2,
+  Scale,
+  Users,
 } from 'lucide-react';
 import {
   Theme,
@@ -52,6 +54,8 @@ interface Props {
   onUpdateConversationSettings: (settings: { systemPrompt: string; temperature: number | null }) => void;
   onOpenDiagnostics: () => void;
   onDataReset: () => void;
+  autoJudge: boolean;
+  onToggleAutoJudge: () => void;
 }
 
 export const SettingsModal: React.FC<Props> = ({
@@ -66,6 +70,8 @@ export const SettingsModal: React.FC<Props> = ({
   onUpdateConversationSettings,
   onOpenDiagnostics,
   onDataReset,
+  autoJudge,
+  onToggleAutoJudge,
 }) => {
   const [activeTab, setActiveTab] = useState<'keys' | 'chat' | 'data'>(initialTab);
   const { toast } = useToast();
@@ -735,6 +741,39 @@ export const SettingsModal: React.FC<Props> = ({
                   onChange={(e) => setTemperature(parseFloat(e.target.value))}
                   className="w-full accent-[var(--accent)]"
                 />
+              </div>
+
+              {/* LLM as a Judge Section */}
+              <div className="space-y-2 pt-3 border-t border-[var(--line)]">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-semibold text-xs text-[var(--ink)]">
+                    <Scale className="w-3.5 h-3.5 text-[var(--accent)]" />
+                    <span>LLM as a Judge (Accuracy Evaluator)</span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoJudge}
+                      onChange={onToggleAutoJudge}
+                      className="sr-only peer"
+                    />
+                    <div className="w-8 h-4 bg-[var(--line)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-[var(--accent)]" />
+                  </label>
+                </div>
+                <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+                  When enabled, every assistant answer is automatically submitted to an independent evaluator model from another AI lab to grade its accuracy (0–100), completeness, and flag hallucination risks.
+                </p>
+              </div>
+
+              {/* AI Council Information */}
+              <div className="space-y-2 pt-3 border-t border-[var(--line)]">
+                <div className="flex items-center gap-1.5 font-semibold text-xs text-[var(--ink)]">
+                  <Users className="w-3.5 h-3.5 text-[var(--accent)]" />
+                  <span>AI Council (Multi-Model Debate)</span>
+                </div>
+                <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+                  Convene 2–3 models across Google, OpenAI, Anthropic, and xAI. Council models present initial positions, cross-examine peer arguments, and synthesize a definitive consensus verdict.
+                </p>
               </div>
 
               {/* Appearance / Theme */}

@@ -9,10 +9,13 @@ import {
   AlertCircle,
   KeyRound,
   ChevronDown,
+  Scale,
 } from 'lucide-react';
 import { Message as MessageType, ModelRef } from '../lib/storage';
 import { getProviderBadgeClass, getProviderLetter } from './ModelPicker';
 import { SourcesList } from './SourcesList';
+import { JudgeCard } from './JudgeCard';
+import { CouncilView } from './CouncilView';
 
 interface Props {
   message: MessageType;
@@ -22,6 +25,7 @@ interface Props {
   onRetryWith?: (model: ModelRef) => void;
   onEditUserMessage?: (newText: string) => void;
   onOpenKeys?: () => void;
+  onJudge?: (messageId: string, model?: ModelRef) => void;
   availableModels?: ModelRef[];
 }
 
@@ -33,6 +37,7 @@ export const MessageItem: React.FC<Props> = ({
   onRetryWith,
   onEditUserMessage,
   onOpenKeys,
+  onJudge,
   availableModels = [],
 }) => {
   const [copied, setCopied] = useState(false);
@@ -308,12 +313,24 @@ export const MessageItem: React.FC<Props> = ({
         </div>
       )}
 
+      {/* AI Council deliberation chamber if message has council session */}
+      {message.council && <CouncilView session={message.council} />}
+
       {/* Citations / Sources Accordion */}
       {message.citations && message.citations.length > 0 && (
         <SourcesList citations={message.citations} messageId={message.id} />
       )}
 
-      {/* Message action bar (Copy, Retry, Retry with…) */}
+      {/* LLM as a Judge scorecard */}
+      {message.judge && (
+        <JudgeCard
+          judge={message.judge}
+          onRejudge={(m) => onJudge?.(message.id, m)}
+          availableModels={availableModels}
+        />
+      )}
+
+      {/* Message action bar (Copy, Retry, Retry with…, Judge) */}
       {message.status !== 'streaming' && message.text && (
         <div className="flex items-center gap-3 mt-3 text-xs text-[var(--muted)]">
           <button
@@ -324,6 +341,19 @@ export const MessageItem: React.FC<Props> = ({
             {copied ? <Check className="w-3.5 h-3.5 text-[var(--success)]" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copied ? 'Copied' : 'Copy'}</span>
           </button>
+
+          {/* Manual Judge trigger button if not evaluated yet */}
+          {!message.judge && onJudge && !message.council && (
+            <button
+              type="button"
+              onClick={() => onJudge(message.id)}
+              className="flex items-center gap-1 hover:text-[var(--ink)] text-[var(--accent)] font-medium transition cursor-pointer"
+              title="Evaluate accuracy with another model as Judge"
+            >
+              <Scale className="w-3.5 h-3.5" />
+              <span>Judge</span>
+            </button>
+          )}
 
           {isLastAssistantMessage && onRetry && (
             <button

@@ -21,12 +21,16 @@ import {
   setLastModel,
   setQuotaExceededHandler,
   setStoredTheme,
+  getAutoJudge,
+  setAutoJudge,
 } from './lib/storage';
 import { generateId } from './lib/ids';
 import { DEFAULT_SYSTEM_PROMPT, generateAutoTitle, retrieveDocumentContext } from './lib/rag';
 import { parseDocumentFile, isSupportedDocFile } from './lib/parse';
 import { isSupportedImageType, MAX_IMAGES_PER_MESSAGE } from './lib/images';
 import { searchTavily, searchWikipedia, buildWebResultsText } from './lib/webSearch';
+import { pickJudgeModel, evaluateResponse } from './lib/judge';
+import { selectCouncilMembers, runCouncilDeliberation } from './lib/council';
 import { getProvider } from './providers';
 import { ChatMsg } from './providers/types';
 import { TopBar } from './components/TopBar';
@@ -50,6 +54,16 @@ function MainApp() {
   const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null);
   const [documents, setDocuments] = useState<Doc[]>([]);
   const [currentModel, setCurrentModel] = useState<ModelRef | null>(null);
+  const [autoJudge, setAutoJudgeState] = useState<boolean>(() => getAutoJudge());
+
+  const handleToggleAutoJudge = () => {
+    setAutoJudgeState((prev) => {
+      const next = !prev;
+      setAutoJudge(next);
+      toast(`Auto-Judge ${next ? 'enabled' : 'disabled'}: ${next ? 'every response evaluated' : 'evaluation off'}`, 'info');
+      return next;
+    });
+  };
 
   // UI States
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -591,6 +605,11 @@ function MainApp() {
         if (!prev || prev.id !== targetConvId) return prev;
         return { ...conv };
       });
+
+      // LLM as a Judge: Auto-evaluate response if enabled
+      if (autoJudge) {
+        handleJudgeMessage(assistantMsgId);
+      }
     } catch (err: any) {
       if (controller.signal.aborted) {
         assistantMsg.status = 'stopped';
@@ -675,9 +694,257 @@ function MainApp() {
     }
   };
 
-  // Build available models for "Retry with…"
+  // LLM as a Judge: Evaluate accuracy of an assistant reply
+  const handleJudgeMessage = async (messageId: string, customJudgeModel?: ModelRef) => {
+    if (!currentConversation) return;
+    const conv = { ...currentConversation };
+    const targetMsgIdx = conv.messages.findIndex((m) => m.id === messageId);
+    if (targetMsgIdx === -1) return;
+
+    const assistantMsg = conv.messages[targetMsgIdx];
+    if (assistantMsg.role !== 'assistant' || !assistantMsg.text.trim()) return;
+
+    // Find preceding user query
+    let userQuery = '';
+    for (let i = targetMsgIdx - 1; i >= 0; i--) {
+      if (conv.messages[i].role === 'user') {
+        userQuery = conv.messages[i].text;
+        break;
+      }
+    }
+    if (!userQuery) userQuery = 'General query';
+
+    // Pick judge model (prioritizing an independent model from another AI lab)
+    const judgeModel = customJudgeModel || pickJudgeModel(assistantMsg.model, keys);
+    if (!judgeModel) {
+      toast('No suitable judge model found. Add an API key from another AI provider in Settings.', 'error');
+      return;
+    }
+
+    const judgeKey = keys[judgeModel.provider];
+    if (!judgeKey) {
+      toast(`Missing API key for judge model ${judgeModel.label}.`, 'error');
+      return;
+    }
+
+    // Set evaluating state
+    assistantMsg.judge = {
+      id: generateId('judge'),
+      judgeModel,
+      evaluatedAt: Date.now(),
+      overallScore: 0,
+      accuracyScore: 0,
+      completenessScore: 0,
+      clarityScore: 0,
+      hallucinationRisk: 'low',
+      verdict: 'Accurate & Reliable',
+      summary: '',
+      strengths: [],
+      weaknesses: [],
+      status: 'judging',
+    };
+    setCurrentConversation({ ...conv });
+
+    try {
+      const contextText =
+        assistantMsg.citations?.map((c) => `[${c.n}] ${c.title}: ${c.excerpt}`).join('\n') || '';
+
+      const evalResult = await evaluateResponse({
+        userQuery,
+        assistantResponse: assistantMsg.text,
+        retrievedContext: contextText,
+        evaluatedModel: assistantMsg.model,
+        judgeModel,
+        key: judgeKey,
+      });
+
+      assistantMsg.judge = evalResult;
+      conv.updatedAt = Date.now();
+      await saveConversation(conv);
+      setCurrentConversation({ ...conv });
+      toast(`Judge (${judgeModel.label}): Accuracy graded ${evalResult.overallScore}/100`, 'success');
+    } catch (err: any) {
+      assistantMsg.judge.status = 'error';
+      assistantMsg.judge.error = err?.message || 'Judge evaluation error';
+      await saveConversation(conv);
+      setCurrentConversation({ ...conv });
+    }
+  };
+
+  // AI Council: Multi-Model Debate & Consensus
+  const handleSendCouncil = async (topic: string, images: MessageImage[] = []) => {
+    if (!topic.trim()) return;
+
+    const councilMembers = selectCouncilMembers(keys);
+    if (councilMembers.length < 2) {
+      toast('AI Council requires at least 2 models. Please add API keys in Settings.', 'error');
+      setIsSettingsModalOpen(true);
+      return;
+    }
+
+    let targetConvId = currentConvId;
+    let conv: Conversation;
+
+    if (!targetConvId || !currentConversation) {
+      const newId = generateId('conv');
+      conv = {
+        id: newId,
+        title: `Council: ${topic.slice(0, 24)}`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [],
+        docIds: [],
+        webSearch: false,
+        settings: {
+          systemPrompt: DEFAULT_SYSTEM_PROMPT,
+          temperature: null,
+        },
+        model: currentModel,
+      };
+      targetConvId = newId;
+      setCurrentConvId(newId);
+    } else {
+      conv = { ...currentConversation };
+    }
+
+    // 1. User message
+    const userMsgId = generateId('msg');
+    const userMsg: Message = {
+      id: userMsgId,
+      role: 'user',
+      text: `[🏛️ AI Council Deliberation]\n${topic}`,
+      images: images.length > 0 ? images : undefined,
+      createdAt: Date.now(),
+    };
+    conv.messages.push(userMsg);
+
+    // 2. Council Assistant message
+    const councilMsgId = generateId('msg');
+    const chair = councilMembers[0].model;
+    const councilMsg: Message = {
+      id: councilMsgId,
+      role: 'assistant',
+      text: '',
+      model: {
+        provider: chair.provider,
+        id: 'ai-council',
+        label: `AI Council (${councilMembers.length} Models)`,
+      },
+      status: 'streaming',
+      createdAt: Date.now(),
+      council: {
+        id: generateId('council'),
+        topic,
+        members: councilMembers,
+        chairModel: chair,
+        currentRound: 1,
+        round1: councilMembers.map((m) => ({
+          member: m,
+          round: 1,
+          text: '',
+          status: 'streaming',
+        })),
+        round2: [],
+        status: 'convening',
+      },
+    };
+    conv.messages.push(councilMsg);
+    setCurrentConversation({ ...conv });
+
+    setIsStreaming(true);
+    streamingConvIdRef.current = targetConvId;
+    const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
+
+    toast(`Convening AI Council with ${councilMembers.map((m) => m.model.label).join(', ')}…`, 'info');
+
+    try {
+      // Gather documents and web context
+      let contextBlock = '';
+      if (conv.docIds.length > 0) {
+        const rag = await retrieveDocumentContext(conv.docIds, topic, '', 1);
+        if (rag.contextBlock) contextBlock += rag.contextBlock + '\n\n';
+      }
+      if (conv.webSearch || !!keys.tavily) {
+        const searchRes = keys.tavily
+          ? await searchTavily(keys.tavily, topic)
+          : await searchWikipedia(topic);
+        if (searchRes && searchRes.sources.length > 0) {
+          const built = buildWebResultsText(searchRes.sources, 1);
+          contextBlock += built.text;
+        }
+      }
+
+      await runCouncilDeliberation({
+        topic,
+        context: contextBlock,
+        members: councilMembers,
+        keys,
+        signal: controller.signal,
+        onUpdate: (session) => {
+          councilMsg.council = { ...session };
+          if (session.consensus) {
+            councilMsg.text = session.consensus.synthesisText;
+          }
+          setCurrentConversation((prev) => {
+            if (!prev || prev.id !== targetConvId) return prev;
+            return {
+              ...prev,
+              messages: [...prev.messages],
+            };
+          });
+        },
+      });
+
+      councilMsg.status = 'done';
+      if (conv.title === 'New chat' || !conv.title) {
+        conv.title = `AI Council: ${topic.slice(0, 24)}…`;
+      }
+      conv.updatedAt = Date.now();
+      await saveConversation(conv);
+      const list = await getConversationIndex();
+      setConversations(list);
+      setCurrentConversation({ ...conv });
+      toast('AI Council reached a final verdict!', 'success');
+    } catch (err: any) {
+      if (controller.signal.aborted) {
+        councilMsg.status = 'stopped';
+        if (councilMsg.council) councilMsg.council.status = 'stopped';
+      } else {
+        councilMsg.status = 'error';
+        councilMsg.error = err?.message || 'Council deliberation failed';
+        if (councilMsg.council) {
+          councilMsg.council.status = 'error';
+          councilMsg.council.error = err?.message || 'Error';
+        }
+      }
+      await saveConversation(conv);
+      setCurrentConversation({ ...conv });
+    } finally {
+      setIsStreaming(false);
+      activeAbortControllerRef.current = null;
+      streamingConvIdRef.current = null;
+    }
+  };
+
+  // Build available models for "Retry with…" and "Judge with…"
   const availableModels: ModelRef[] = [];
-  if (currentModel) {
+  if (keys.openai) {
+    availableModels.push({ provider: 'openai', id: 'gpt-4o', label: 'GPT-4o' });
+    availableModels.push({ provider: 'openai', id: 'gpt-4o-mini', label: 'GPT-4o Mini' });
+  }
+  if (keys.gemini) {
+    availableModels.push({ provider: 'gemini', id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' });
+    availableModels.push({ provider: 'gemini', id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' });
+  }
+  if (keys.anthropic) {
+    availableModels.push({ provider: 'anthropic', id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' });
+    availableModels.push({ provider: 'anthropic', id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' });
+  }
+  if (keys.xai) {
+    availableModels.push({ provider: 'xai', id: 'grok-2-latest', label: 'Grok 2' });
+  }
+  if (currentModel && !availableModels.some((m) => m.provider === currentModel.provider && m.id === currentModel.id)) {
     availableModels.push(currentModel);
   }
 
@@ -722,6 +989,7 @@ function MainApp() {
           conversation={currentConversation}
           keys={keys}
           onSendMessage={handleSendMessage}
+          onSendCouncil={handleSendCouncil}
           isStreaming={isStreaming}
           onStop={handleStopStream}
           currentModel={currentModel}
@@ -743,6 +1011,9 @@ function MainApp() {
           webSearch={currentConversation?.webSearch || false}
           onToggleWebSearch={handleToggleWebSearch}
           onOpenSystemPrompt={() => openSettingsWithTab('chat')}
+          onJudge={handleJudgeMessage}
+          autoJudge={autoJudge}
+          onToggleAutoJudge={handleToggleAutoJudge}
         />
       </div>
 
@@ -780,6 +1051,8 @@ function MainApp() {
         onClose={() => setIsSettingsModalOpen(false)}
         initialTab={settingsInitialTab}
         keys={keys}
+        autoJudge={autoJudge}
+        onToggleAutoJudge={handleToggleAutoJudge}
         onKeysChanged={(newKeys) => {
           setKeys(newKeys);
           if (newKeys.tavily && currentConversation && !currentConversation.webSearch) {

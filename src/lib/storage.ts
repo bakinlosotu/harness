@@ -32,6 +32,56 @@ export interface ModelRef {
   label: string;
 }
 
+export interface JudgeEvaluation {
+  id: string;
+  judgeModel: ModelRef;
+  evaluatedAt: number;
+  overallScore: number; // 0 - 100
+  accuracyScore: number; // 1 - 10
+  completenessScore: number; // 1 - 10
+  clarityScore: number; // 1 - 10
+  hallucinationRisk: 'low' | 'medium' | 'high';
+  verdict: 'Accurate & Reliable' | 'Minor Issues / Incomplete' | 'Questionable / Inaccurate';
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  suggestedCorrections?: string;
+  status: 'judging' | 'done' | 'error';
+  error?: string;
+}
+
+export interface CouncilMember {
+  model: ModelRef;
+  roleTitle: string;
+}
+
+export interface CouncilSpeech {
+  member: CouncilMember;
+  round: 1 | 2;
+  text: string;
+  status: 'streaming' | 'done' | 'error';
+}
+
+export interface CouncilConsensus {
+  synthesisText: string;
+  agreedPoints: string[];
+  debatedTradeoffs: string[];
+  finalVerdict: string;
+}
+
+export interface CouncilSession {
+  id: string;
+  topic: string;
+  members: CouncilMember[];
+  chairModel: ModelRef;
+  currentRound: 1 | 2 | 3;
+  round1: CouncilSpeech[];
+  round2: CouncilSpeech[];
+  consensus?: CouncilConsensus;
+  status: 'convening' | 'debating' | 'synthesizing' | 'done' | 'stopped' | 'error';
+  error?: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -42,11 +92,15 @@ export interface Message {
   status?: 'streaming' | 'done' | 'stopped' | 'error';
   error?: string;
   createdAt: number;
+  judge?: JudgeEvaluation;
+  council?: CouncilSession;
 }
 
 export interface ConversationSettings {
   systemPrompt: string;
   temperature: number | null;
+  autoJudge?: boolean;
+  preferredJudgeModel?: ModelRef | null;
 }
 
 export interface Conversation {
@@ -125,6 +179,43 @@ export function isRememberKeys(): boolean {
     return localStorage.getItem('harness.rememberKeys') === 'true';
   } catch {
     return false;
+  }
+}
+
+export function getAutoJudge(): boolean {
+  try {
+    return localStorage.getItem('harness.autoJudge') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function setAutoJudge(enabled: boolean): void {
+  try {
+    localStorage.setItem('harness.autoJudge', enabled ? 'true' : 'false');
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getPreferredJudgeModel(): ModelRef | null {
+  try {
+    const raw = localStorage.getItem('harness.preferredJudge');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setPreferredJudgeModel(model: ModelRef | null): void {
+  try {
+    if (model) {
+      localStorage.setItem('harness.preferredJudge', JSON.stringify(model));
+    } else {
+      localStorage.removeItem('harness.preferredJudge');
+    }
+  } catch {
+    // Ignore storage errors
   }
 }
 

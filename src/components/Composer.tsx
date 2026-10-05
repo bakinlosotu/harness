@@ -8,14 +8,17 @@ import {
   X,
   FileText,
   Sliders,
-  Check,
+  Scale,
+  Users,
 } from 'lucide-react';
 import { MessageImage, ModelRef, Keys } from '../lib/storage';
 import { MAX_IMAGES_PER_MESSAGE, processImageFile, isSupportedImageType } from '../lib/images';
+import { selectCouncilMembers } from '../lib/council';
 import { useToast } from './Toasts';
 
 interface Props {
   onSendMessage: (text: string, images: MessageImage[]) => void;
+  onSendCouncil?: (topic: string, images: MessageImage[]) => void;
   isStreaming: boolean;
   onStop: () => void;
   currentModel: ModelRef | null;
@@ -27,10 +30,13 @@ interface Props {
   webSearch: boolean;
   onToggleWebSearch: () => void;
   onOpenSystemPrompt: () => void;
+  autoJudge: boolean;
+  onToggleAutoJudge: () => void;
 }
 
 export const Composer: React.FC<Props> = ({
   onSendMessage,
+  onSendCouncil,
   isStreaming,
   onStop,
   currentModel,
@@ -42,6 +48,8 @@ export const Composer: React.FC<Props> = ({
   webSearch,
   onToggleWebSearch,
   onOpenSystemPrompt,
+  autoJudge,
+  onToggleAutoJudge,
 }) => {
   const [text, setText] = useState('');
   const [images, setImages] = useState<MessageImage[]>([]);
@@ -50,6 +58,8 @@ export const Composer: React.FC<Props> = ({
   const { toast } = useToast();
 
   const hasAnyKey = !!(keys.openai || keys.gemini || keys.anthropic || keys.xai);
+  const councilMembers = selectCouncilMembers(keys);
+  const canRunCouncil = councilMembers.length >= 2;
 
   // Auto-grow textarea to max 8 lines
   useEffect(() => {
@@ -170,6 +180,23 @@ export const Composer: React.FC<Props> = ({
     }
   };
 
+  const handleCouncil = () => {
+    if (!text.trim() && images.length === 0) return;
+    if (!canRunCouncil) {
+      toast('AI Council requires at least 2 models. Add another company API key in Settings.', 'error');
+      onOpenSettings();
+      return;
+    }
+    if (onSendCouncil) {
+      onSendCouncil(text.trim(), images);
+      setText('');
+      setImages([]);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -190,8 +217,8 @@ export const Composer: React.FC<Props> = ({
 
   return (
     <div className="w-full max-w-[720px] mx-auto px-4 pb-4">
-      {/* Pill buttons above composer: System prompt & Document chip */}
-      <div className="flex items-center gap-2 mb-2">
+      {/* Pill buttons above composer: System prompt, Document chip, Auto-Judge */}
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
         <button
           type="button"
           onClick={onOpenSystemPrompt}
@@ -212,6 +239,26 @@ export const Composer: React.FC<Props> = ({
             <span>Using {selectedDocCount} document{selectedDocCount > 1 ? 's' : ''}</span>
           </button>
         )}
+
+        {/* Auto-Judge Toggle Pill */}
+        <button
+          type="button"
+          onClick={onToggleAutoJudge}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition shadow-2xs ${
+            autoJudge
+              ? 'bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+              : 'border border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--canvas)] text-[var(--muted)] hover:text-[var(--ink)]'
+          }`}
+          title={
+            autoJudge
+              ? 'Auto-Judge is ON: Every assistant reply will be evaluated for accuracy by an independent model'
+              : 'Auto-Judge is OFF: Click to automatically evaluate every response for accuracy'
+          }
+        >
+          <Scale className={`w-3.5 h-3.5 ${autoJudge ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--muted)]'}`} />
+          <span>Auto-Judge:</span>
+          <span className={autoJudge ? 'font-bold' : 'font-normal'}>{autoJudge ? 'ON' : 'OFF'}</span>
+        </button>
       </div>
 
       {/* Main Composer Box */}
@@ -309,6 +356,33 @@ export const Composer: React.FC<Props> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {/* AI Council Button */}
+            {!isStreaming && (
+              <button
+                type="button"
+                onClick={handleCouncil}
+                disabled={!text.trim() || !canRunCouncil}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold cursor-pointer transition shadow-2xs ${
+                  text.trim() && canRunCouncil
+                    ? 'bg-gradient-to-r from-amber-600 via-orange-600 to-indigo-600 text-white hover:opacity-95 shadow-sm'
+                    : 'bg-[var(--canvas)] text-[var(--muted)] border border-[var(--line)] opacity-60 cursor-not-allowed'
+                }`}
+                title={
+                  !canRunCouncil
+                    ? 'AI Council requires at least 2 models. Add keys in Settings.'
+                    : `Convene AI Council (${councilMembers.length} company models debate & reach consensus)`
+                }
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>AI Council</span>
+                {canRunCouncil && (
+                  <span className="w-4 h-4 rounded-full bg-white/25 text-[10px] flex items-center justify-center font-bold">
+                    {councilMembers.length}
+                  </span>
+                )}
+              </button>
+            )}
+
             {isStreaming ? (
               <button
                 type="button"

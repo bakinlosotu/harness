@@ -23,6 +23,10 @@ interface Props {
   webSearch: boolean;
   onToggleWebSearch: () => void;
   onOpenSystemPrompt: () => void;
+  onJudge?: (messageId: string, model?: ModelRef) => void;
+  onSendCouncil?: (topic: string, images: MessageImage[]) => void;
+  autoJudge: boolean;
+  onToggleAutoJudge: () => void;
 }
 
 export const ChatView: React.FC<Props> = ({
@@ -44,6 +48,10 @@ export const ChatView: React.FC<Props> = ({
   webSearch,
   onToggleWebSearch,
   onOpenSystemPrompt,
+  onJudge,
+  onSendCouncil,
+  autoJudge,
+  onToggleAutoJudge,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -222,6 +230,7 @@ export const ChatView: React.FC<Props> = ({
                     onRetryWith={onRetryWith}
                     onEditUserMessage={onEditUserMessage}
                     onOpenKeys={onOpenSettings}
+                    onJudge={onJudge}
                     availableModels={availableModels}
                   />
                 );
@@ -246,6 +255,7 @@ export const ChatView: React.FC<Props> = ({
       {/* Composer at Bottom */}
       <Composer
         onSendMessage={onSendMessage}
+        onSendCouncil={onSendCouncil}
         isStreaming={isStreaming}
         onStop={onStop}
         currentModel={currentModel}
@@ -257,6 +267,8 @@ export const ChatView: React.FC<Props> = ({
         webSearch={webSearch}
         onToggleWebSearch={onToggleWebSearch}
         onOpenSystemPrompt={onOpenSystemPrompt}
+        autoJudge={autoJudge}
+        onToggleAutoJudge={onToggleAutoJudge}
       />
     </div>
   );
