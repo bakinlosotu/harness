@@ -1,0 +1,8 @@
+{
+  "name": "Harness",
+  "description": "Bring-your-own-key multi-model assistant supporting OpenAI, Google Gemini, Anthropic, and xAI with document RAG, free web search, and Gmail integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
