@@ -184,9 +184,28 @@ app.post('/api/mail/send', limit(10), mailJson, async (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: { message: 'Not found' } }));
 
 // ---------- static SPA ----------
-const root = fs.existsSync('dist') ? 'dist' : '.';
+const distPath = path.resolve('dist');
+const distIndex = path.join(distPath, 'index.html');
+
+// Fallback: If dist/index.html is missing at runtime, build it automatically
+if (!fs.existsSync(distIndex)) {
+  console.log('[Server] dist/index.html not found. Running vite build...');
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync('npx vite build', { stdio: 'inherit' });
+  } catch (err) {
+    console.error('[Server] Automatic build error:', err);
+  }
+}
+
+const root = fs.existsSync(distIndex) ? distPath : path.resolve('.');
 app.use(express.static(root, { index: 'index.html' }));
-app.use((_req, res) => res.sendFile(path.resolve(root, 'index.html')));
+app.use((_req, res) => {
+  if (fs.existsSync(distIndex)) {
+    return res.sendFile(distIndex);
+  }
+  res.sendFile(path.resolve(root, 'index.html'));
+});
 
 process.on('unhandledRejection', () => {});
 app.listen(process.env.PORT || 3000);
